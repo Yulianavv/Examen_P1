@@ -1,0 +1,16 @@
+services:
+  servidor:
+    image: python:3.11-alpine
+    container_name: chat-servidor
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      CHAT_PORT: "${CHAT_PORT:-5000}"
+      MAX_CLIENTES: "${MAX_CLIENTES:-2}"
+    ports:
+      - "${CHAT_PORT:-5000}:${CHAT_PORT:-5000}"
+    stdin_open: true
+    tty: true
+    command: python servidor.py
