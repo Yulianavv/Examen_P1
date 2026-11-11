@@ -53,7 +53,10 @@ Ejecutar el mismo comando. Debe conectarse como `CLIENTE 2`.
    Cliente 1 como `[CLIENTE 2]: mensaje`.
 3. Escribir un mensaje en la Terminal 1. Debe aparecer en ambos clientes como
    `[SERVIDOR]: mensaje`.
-4. Escribir mensajes en ambos clientes sin esperar turnos.
+4. Escribir mensajes en ambos clientes sin esperar turnos. La aplicación lee
+   el teclado carácter por carácter, conserva lo escrito y redibuja el prompt
+   cuando llega un mensaje, por lo que ningún texto parcial se pierde ni se
+   mezcla.
 5. Para salir, escribir `salir` o pulsar `Ctrl+C`.
 
 El servidor admite dos clientes por defecto. Un tercero recibe
@@ -96,4 +99,3 @@ CHAT_PORT=6000 python3 cliente.py
   `docker compose down`; después iniciar nuevamente el servidor.
 - **No conecta:** verificar que el servidor esté ejecutándose y que todos
   utilicen el mismo puerto.
-

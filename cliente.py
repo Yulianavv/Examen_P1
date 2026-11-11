@@ -13,22 +13,92 @@ HOST = os.environ.get("CHAT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CHAT_PORT", "5000"))
 PROMPT = "> "
 detener_cliente = threading.Event()
+lock_pantalla = threading.Lock()
 
 
-def imprimir_mensaje(mensaje: str) -> None:
-    """Limpia la linea actual, imprime el mensaje y repone el prompt."""
-    print(f"\r\033[2K{mensaje}")
-    if not detener_cliente.is_set():
-        print(PROMPT, end="", flush=True)
+def redibujar_linea(mensaje: str, buffer: str) -> None:
+    """Redibuja un mensaje y conserva visible el texto escrito a medias."""
+    print(f"\r\033[2K{mensaje}\n{PROMPT}{buffer}", end="", flush=True)
 
 
-def recibir_mensajes(lector) -> None:
-    """Hilo daemon: recibe lineas mientras el hilo principal lee input()."""
+def imprimir_mensaje(mensaje: str, buffer: list[str]) -> None:
+    """Imprime una recepción sin mezclarla con el buffer del teclado."""
+    with lock_pantalla:
+        redibujar_linea(mensaje, buffer[0])
+
+
+def leer_teclado(buffer: list[str]) -> str | None:
+    """Lee caracteres, controla el buffer y devuelve una línea al pulsar Enter."""
+    if not sys.stdin.isatty():
+        try:
+            return input()
+        except EOFError:
+            return None
+
+    if os.name == "nt":
+        import msvcrt
+
+        while True:
+            caracter = msvcrt.getwch()
+            if caracter in ("\r", "\n"):
+                with lock_pantalla:
+                    texto = buffer[0]
+                    buffer[0] = ""
+                return texto
+            if caracter in ("\x03", "\x1a"):
+                return None
+            if caracter in ("\x00", "\xe0"):
+                msvcrt.getwch()
+                continue
+            if caracter in ("\b", "\x7f"):
+                with lock_pantalla:
+                    if buffer[0]:
+                        buffer[0] = buffer[0][:-1]
+                        print("\b \b", end="", flush=True)
+                continue
+            with lock_pantalla:
+                buffer[0] += caracter
+                print(caracter, end="", flush=True)
+
+    import termios
+    import tty
+
+    descriptor = sys.stdin.fileno()
+    estado_original = termios.tcgetattr(descriptor)
+    try:
+        tty.setcbreak(descriptor)
+        estado_sin_eco = termios.tcgetattr(descriptor)
+        estado_sin_eco[3] &= ~termios.ECHO
+        termios.tcsetattr(descriptor, termios.TCSANOW, estado_sin_eco)
+        while True:
+            caracter = sys.stdin.read(1)
+            if caracter in ("\r", "\n"):
+                with lock_pantalla:
+                    texto = buffer[0]
+                    buffer[0] = ""
+                return texto
+            if caracter in ("\x03", "\x04", "\x1a"):
+                return None
+            if caracter in ("\x7f", "\b"):
+                with lock_pantalla:
+                    if buffer[0]:
+                        buffer[0] = buffer[0][:-1]
+                        print("\b \b", end="", flush=True)
+                continue
+            with lock_pantalla:
+                buffer[0] += caracter
+                print(caracter, end="", flush=True)
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, estado_original)
+
+
+def recibir_mensajes(lector, buffer: list[str]) -> None:
+    """Hilo daemon que recibe mensajes sin bloquear el teclado."""
     try:
         for linea in lector:
             mensaje = linea.rstrip("\r\n")
             if mensaje:
-                imprimir_mensaje(mensaje)
+                imprimir_mensaje(mensaje, buffer)
         detener_cliente.set()
     except (ConnectionError, OSError, UnicodeError):
         detener_cliente.set()
@@ -58,29 +128,24 @@ def iniciar_cliente() -> None:
         numero = identificacion.split(":", 1)[1]
         print(f"Conectado como CLIENTE {numero} a {HOST}:{PORT}")
 
+        buffer = [""]
         hilo_receptor = threading.Thread(
-            target=recibir_mensajes, args=(lector,), daemon=True
+            target=recibir_mensajes, args=(lector, buffer), daemon=True
         )
         hilo_receptor.start()
-        print(PROMPT, end="", flush=True)
+        with lock_pantalla:
+            print(PROMPT, end="", flush=True)
 
         while not detener_cliente.is_set():
-            try:
-                texto = input()
-            except EOFError:
-                texto = "salir"
-            except KeyboardInterrupt:
-                print()
-                texto = "salir"
-            if texto.lower() == "salir":
+            texto = leer_teclado(buffer)
+            if texto is None or texto.lower() == "salir":
                 detener_cliente.set()
                 break
             if texto:
                 conexion.sendall((texto + "\n").encode("utf-8"))
-                # input() ya dejo el cursor en la linea siguiente. Se sube a
-                # la linea escrita, se reemplaza el texto y se repone el prompt.
-                print(f"\033[A\033[2K[CLIENTE {numero}]: {texto}")
-                print(PROMPT, end="", flush=True)
+                with lock_pantalla:
+                    print(f"\r\033[2K[CLIENTE {numero}]: {texto}")
+                    print(PROMPT, end="", flush=True)
     except (ConnectionError, OSError, UnicodeError) as error:
         print(f"\nNo se pudo mantener la conexion: {error}", file=sys.stderr)
     finally:
